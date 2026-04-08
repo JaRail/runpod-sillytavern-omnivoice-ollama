@@ -1,0 +1,9 @@
+.git
+.gitignore
+.dockerignore
+__pycache__
+omnivoice_models/
+ollama_models/
+st_data/
+st_plugins/
+README.md

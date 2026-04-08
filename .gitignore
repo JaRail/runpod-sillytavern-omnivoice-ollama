@@ -1,0 +1,12 @@
+# Ignore downloaded AI models and data caches
+__pycache__/
+*.pyc
+omnivoice_models/
+ollama_models/
+st_data/
+st_plugins/
+
+# Ignore IDE and OS files
+.vscode/
+.idea/
+.DS_Store
