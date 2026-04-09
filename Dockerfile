@@ -2,6 +2,7 @@ FROM nvidia/cuda:12.1.1-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
+ENV SILLYTAVERN_LISTEN=true
 
 WORKDIR /app
 

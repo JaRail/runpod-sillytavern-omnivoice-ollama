@@ -92,6 +92,19 @@ else
     echo "Skipping OmniVoice (ENABLE_OMNIVOICE is set to false)."
 fi
 
+echo "=== Verifying SillyTavern Configuration Integrity ==="
+cd /app/SillyTavern
+
+# Check if config.yaml exists. If it does, try to parse it.
+if [ -f "config.yaml" ]; then
+    node -e "try { require('yaml').parse(require('fs').readFileSync('config.yaml', 'utf8')) } catch (e) { process.exit(1) }" || {
+        echo "Corrupted config.yaml detected (likely duplicate keys from migration). Triggering self-healing..."
+        # Delete both the symlink and the physical file in the workspace to guarantee a clean slate
+        rm -f /app/SillyTavern/config.yaml
+        rm -f /workspace/config.yaml
+    }
+fi
+
 # 6. Boot SillyTavern (Always runs)
 echo "Starting SillyTavern on port 8000..."
 cd /app/SillyTavern
