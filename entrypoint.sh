@@ -41,14 +41,15 @@ for file in config.yaml secrets.json; do
     ln -s "/workspace/$file" "./$file"
 done
 
+echo "=== Configuring SillyTavern Security ==="
 # 3. Ensure SillyTavern binds to 0.0.0.0 for RunPod Proxy
 if ! grep -q "listen: true" /workspace/config.yaml; then
     sed -i 's/listen: false/listen: true/g' /workspace/config.yaml 2>/dev/null || echo "listen: true" >> /workspace/config.yaml
 fi
 
-# Fix: Disable IP whitelist so RunPod's internal proxy IPs aren't blocked
-if ! grep -q "whitelistMode: false" /workspace/config.yaml; then
-    echo "whitelistMode: false" >> /workspace/config.yaml
+# Automatically disable whitelist mode so the RunPod web UI is accessible
+if [ -f "config.yaml" ]; then
+    sed -i 's/whitelistMode: true/whitelistMode: false/g' config.yaml
 fi
 
 echo "=== Booting Servers ==="
