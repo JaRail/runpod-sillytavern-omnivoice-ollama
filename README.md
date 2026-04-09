@@ -16,12 +16,13 @@ This repository gives you a fully self-hosted, private AI voice chat environment
 
 ## 📂 Repository Structure
 
+```
 .
 ├── Dockerfile              # The optimized build instructions for the container
 ├── entrypoint.sh           # Handles volume mounting, config persistence, and server boot
 ├── .dockerignore           # Prevents local models/data from bloating the image build
 └── .gitignore              
-
+```
 
 ## 🚀 Deployment Guide
 
@@ -35,11 +36,15 @@ You will need to build this Docker image and push it to a container registry lik
 
 3. Build the image (using your lowercase Docker Hub username):
 
+   ```
    docker build -t jarail/sillytavern-omnivoice-ollama:latest .
+   ```
 
 4. Push the image to your registry:
 
+   ```
    docker push jarail/sillytavern-omnivoice-ollama:latest
+   ```
 
 ### Step 2: Configure the RunPod Template
 
@@ -78,6 +83,8 @@ Log into your RunPod dashboard and create a **New Template** with the following 
 2. **Connect the Voice:** Go to the Extensions/Audio tab. Select **OpenAI TTS** from the dropdown menu and set the API Endpoint URL to `http://127.0.0.1:8001/v1`.
 
 3. Enable your microphone in SillyTavern, pick a character, and start talking!
+
+---
 
 ## 👨‍💻 Author
 
