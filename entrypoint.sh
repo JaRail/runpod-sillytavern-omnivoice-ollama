@@ -47,18 +47,18 @@ if ! grep -q "listen: true" /workspace/config.yaml; then
     sed -i 's/listen: false/listen: true/g' /workspace/config.yaml 2>/dev/null || echo "listen: true" >> /workspace/config.yaml
 fi
 
-# Automatically disable whitelist mode so the RunPod web UI is accessible
+# 4. Automatically disable whitelist mode so the RunPod web UI is accessible
 if [ -f "config.yaml" ]; then
     sed -i 's/whitelistMode: true/whitelistMode: false/g' config.yaml
 fi
 
 echo "=== Booting Servers ==="
 
-# Set default toggles to true if not specified by the user in RunPod
+# 5. Set default toggles to true if not specified by the user in RunPod
 ENABLE_OLLAMA=${ENABLE_OLLAMA:-"true"}
 ENABLE_OMNIVOICE=${ENABLE_OMNIVOICE:-"true"}
 
-# 4. Force all ML models and caches to the persistent drive
+# 6. Force all ML models and caches to the persistent drive
 export HF_HOME="/workspace/omnivoice_models"
 export TORCH_HOME="/workspace/torch_cache"
 export XDG_CACHE_HOME="/workspace/general_cache"
@@ -66,7 +66,7 @@ export OLLAMA_HOST="0.0.0.0"
 
 PIDS_TO_WAIT=""
 
-# Start Ollama Daemon conditionally
+# 7. Start Ollama Daemon conditionally
 if [ "$ENABLE_OLLAMA" = "true" ] || [ "$ENABLE_OLLAMA" = "1" ]; then
     echo "Starting Ollama API on port 11434..."
     ollama serve &
@@ -83,10 +83,10 @@ else
     echo "Skipping Ollama (ENABLE_OLLAMA is set to false)."
 fi
 
-# 5. Boot OmniVoice API Bridge conditionally
+# 8. Boot OmniVoice API Bridge conditionally via cmd line args on port 8001
 if [ "$ENABLE_OMNIVOICE" = "true" ] || [ "$ENABLE_OMNIVOICE" = "1" ]; then
     echo "Starting OmniVoice API on port 8001..."
-    omnivoice-server --host 0.0.0.0 --port 8001 --device cuda &
+    OMNIVOICE_PORT=8001 omnivoice-server --host 0.0.0.0 --device cuda &
     OMNI_PID=$!
     PIDS_TO_WAIT="$PIDS_TO_WAIT $OMNI_PID"
 else
@@ -96,7 +96,7 @@ fi
 echo "=== Verifying SillyTavern Configuration Integrity ==="
 cd /app/SillyTavern
 
-# Check if config.yaml exists. If it does, try to parse it.
+# 9. Check if config.yaml exists. If it does, try to parse it.
 if [ -f "config.yaml" ]; then
     node -e "try { require('yaml').parse(require('fs').readFileSync('config.yaml', 'utf8')) } catch (e) { process.exit(1) }" || {
         echo "Corrupted config.yaml detected (likely duplicate keys from migration). Triggering self-healing..."
@@ -106,7 +106,7 @@ if [ -f "config.yaml" ]; then
     }
 fi
 
-# 6. Boot SillyTavern (Always runs)
+# 10. Boot SillyTavern (Always runs)
 echo "Starting SillyTavern on port 8000..."
 cd /app/SillyTavern
 ./start.sh &
@@ -115,9 +115,9 @@ PIDS_TO_WAIT="$PIDS_TO_WAIT $SILLY_PID"
 
 echo "Systems nominal. Servers are running."
 
-# Graceful shutdown handling for RunPod stop requests
+# 11. Graceful shutdown handling for RunPod stop requests
 trap "kill $PIDS_TO_WAIT" SIGINT SIGTERM
 
-# Fix: Use 'wait -n' so if ANY server crashes (like ST out-of-memory), the whole container safely stops
+# 12. Use 'wait -n' so if ANY server crashes (like ST out-of-memory), the whole container safely stops
 wait -n $PIDS_TO_WAIT || true
 kill $PIDS_TO_WAIT 2>/dev/null || true
