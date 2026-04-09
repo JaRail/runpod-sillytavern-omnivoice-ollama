@@ -6,12 +6,13 @@ ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
 # 1. System Dependencies & Package Managers
+# Removed the --break-system-packages flag as Ubuntu 22.04 pip doesn't require or support it
 RUN apt-get update && apt-get install -y \
     curl git python3 python3-pip python3-venv \
-    ffmpeg libsm6 libxext6 jq pciutils \
+    ffmpeg libsm6 libxext6 jq pciutils zstd \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
-    && pip3 install --break-system-packages uv \
+    && pip3 install uv \
     && curl -fsSL https://ollama.com/install.sh | sh \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
@@ -19,10 +20,7 @@ RUN apt-get update && apt-get install -y \
 RUN uv pip install --system torch==2.8.0+cu128 torchaudio==2.8.0+cu128 --extra-index-url https://download.pytorch.org/whl/cu128
 
 # 3. OmniVoice Setup
-RUN git clone https://github.com/k2-fsa/OmniVoice.git && \
-    cd OmniVoice && \
-    uv pip install --system -r requirements.txt && \
-    uv pip install --system omnivoice-server
+RUN uv pip install --system omnivoice-server
 
 # 4. SillyTavern Setup
 RUN git clone https://github.com/SillyTavern/SillyTavern.git && \
