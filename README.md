@@ -16,13 +16,12 @@ This repository gives you a fully self-hosted, private AI voice chat environment
 
 ## 📂 Repository Structure
 
-```
 .
 ├── Dockerfile              # The optimized build instructions for the container
 ├── entrypoint.sh           # Handles volume mounting, config persistence, and server boot
 ├── .dockerignore           # Prevents local models/data from bloating the image build
 └── .gitignore              
-```
+
 
 ## 🚀 Deployment Guide
 
@@ -34,17 +33,13 @@ You will need to build this Docker image and push it to a container registry lik
 
 2. Authenticate with Docker Hub: `docker login`
 
-3. Build the image:
+3. Build the image (using your lowercase Docker Hub username):
 
-   ```
-   docker build -t JaRail/sillytavern-omnivoice-ollama:latest .
-   ```
+   docker build -t jarail/sillytavern-omnivoice-ollama:latest .
 
 4. Push the image to your registry:
 
-   ```
-   docker push JaRail/sillytavern-omnivoice-ollama:latest
-   ```
+   docker push jarail/sillytavern-omnivoice-ollama:latest
 
 ### Step 2: Configure the RunPod Template
 
@@ -52,7 +47,7 @@ Log into your RunPod dashboard and create a **New Template** with the following 
 
 * **Template Name:** SillyTavern + OmniVoice + Ollama (Full Stack)
 
-* **Container Image:** `JaRail/sillytavern-omnivoice-ollama:latest`
+* **Container Image:** `jarail/sillytavern-omnivoice-ollama:latest`
 
 * **Container Disk:** `20 GB` (The image itself is large due to PyTorch, CUDA, and the OS).
 
@@ -84,9 +79,8 @@ Log into your RunPod dashboard and create a **New Template** with the following 
 
 3. Enable your microphone in SillyTavern, pick a character, and start talking!
 
----
-
 ## 👨‍💻 Author
 
 **James Railton**
+
 * GitHub: [@JaRail](https://github.com/JaRail)
