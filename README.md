@@ -76,6 +76,8 @@ Log into your RunPod dashboard and create a **New Template** with the following 
 
 3. Click **Connect to HTTP Port 8000** to open the SillyTavern Web UI.
 
+4. Click **Connect to HTTP Port 8888** to open JupyterLab for remote file management.
+
 ### Step 4: Configure SillyTavern inside the UI
 
 1. **Connect the LLM:** Go to the API connections tab, select "Chat Completion", choose "OpenAI-Compatible", and set the URL to `http://127.0.0.1:11434/v1`.

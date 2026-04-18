@@ -20,8 +20,8 @@ RUN apt-get update && apt-get install -y \
 # 2. Heavy ML Dependencies (Isolated layer for caching)
 RUN uv pip install --system torch==2.8.0+cu128 torchaudio==2.8.0+cu128 --extra-index-url https://download.pytorch.org/whl/cu128
 
-# 3. OmniVoice Setup
-RUN uv pip install --system omnivoice-server
+# 3. Python Services (OmniVoice, JupyterLab)
+RUN uv pip install --system omnivoice-server jupyterlab
 
 # 4. SillyTavern Setup
 RUN git clone https://github.com/SillyTavern/SillyTavern.git && \
@@ -32,5 +32,5 @@ RUN git clone https://github.com/SillyTavern/SillyTavern.git && \
 COPY entrypoint.sh /app/
 RUN chmod +x /app/entrypoint.sh
 
-EXPOSE 8000 8001 11434
+EXPOSE 8000 8001 8888 11434
 ENTRYPOINT ["/app/entrypoint.sh"]

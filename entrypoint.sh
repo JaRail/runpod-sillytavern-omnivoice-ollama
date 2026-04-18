@@ -50,13 +50,21 @@ fi
 # 4. Automatically disable whitelist mode so the RunPod web UI is accessible
 if [ -f "config.yaml" ]; then
     sed -i 's/whitelistMode: true/whitelistMode: false/g' config.yaml
+
+    # Enable Basic Auth and inject credentials from RunPod environment variables
+    # (Using default fallbacks if the user left them blank)
+    sed -i 's/basicAuthMode: false/basicAuthMode: true/g' config.yaml
+    sed -i "s/basicAuthUser: .*/basicAuthUser: '${ST_USER:-admin}'/g" config.yaml
+    sed -i "s/basicAuthPass: .*/basicAuthPass: '${ST_PASS:-password}'/g" config.yaml
 fi
+
 
 echo "=== Booting Servers ==="
 
 # 5. Set default toggles to true if not specified by the user in RunPod
 ENABLE_OLLAMA=${ENABLE_OLLAMA:-"true"}
 ENABLE_OMNIVOICE=${ENABLE_OMNIVOICE:-"true"}
+ENABLE_JUPYTER=${ENABLE_JUPYTER:-"true"}
 
 # 6. Force all ML models and caches to the persistent drive
 export HF_HOME="/workspace/omnivoice_models"
@@ -93,10 +101,20 @@ else
     echo "Skipping OmniVoice (ENABLE_OMNIVOICE is set to false)."
 fi
 
+# 9. Boot JupyterLab conditionally
+if [ "$ENABLE_JUPYTER" = "true" ] || [ "$ENABLE_JUPYTER" = "1" ]; then
+    echo "Starting JupyterLab on port 8888..."
+    jupyter lab --allow-root --ip=0.0.0.0 --port=8888 --no-browser --NotebookApp.token='' --NotebookApp.password='' --notebook-dir=/workspace &
+    JUPYTER_PID=$!
+    PIDS_TO_WAIT="$PIDS_TO_WAIT $JUPYTER_PID"
+else
+    echo "Skipping JupyterLab (ENABLE_JUPYTER is set to false)."
+fi
+
 echo "=== Verifying SillyTavern Configuration Integrity ==="
 cd /app/SillyTavern
 
-# 9. Check if config.yaml exists. If it does, try to parse it.
+# 10. Check if config.yaml exists. If it does, try to parse it.
 if [ -f "config.yaml" ]; then
     node -e "try { require('yaml').parse(require('fs').readFileSync('config.yaml', 'utf8')) } catch (e) { process.exit(1) }" || {
         echo "Corrupted config.yaml detected (likely duplicate keys from migration). Triggering self-healing..."
@@ -106,7 +124,7 @@ if [ -f "config.yaml" ]; then
     }
 fi
 
-# 10. Boot SillyTavern (Always runs)
+# 11. Boot SillyTavern (Always runs)
 echo "Starting SillyTavern on port 8000..."
 cd /app/SillyTavern
 ./start.sh &
@@ -115,9 +133,9 @@ PIDS_TO_WAIT="$PIDS_TO_WAIT $SILLY_PID"
 
 echo "Systems nominal. Servers are running."
 
-# 11. Graceful shutdown handling for RunPod stop requests
+# 12. Graceful shutdown handling for RunPod stop requests
 trap "kill $PIDS_TO_WAIT" SIGINT SIGTERM
 
-# 12. Use 'wait -n' so if ANY server crashes (like ST out-of-memory), the whole container safely stops
+# 13. Use 'wait -n' so if ANY server crashes (like ST out-of-memory), the whole container safely stops
 wait -n $PIDS_TO_WAIT || true
 kill $PIDS_TO_WAIT 2>/dev/null || true
