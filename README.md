@@ -58,7 +58,7 @@ Log into your RunPod dashboard and create a **New Template** with the following 
 
 * **Volume Disk:** `50 GB+` (Required to store the OmniVoice HuggingFace models, Ollama LLMs, and chat history. Recommend more if downloading large models).
 
-* **Exposed TCP Ports:** `8000, 8001, 11434`
+* **Exposed TCP Ports:** `8000, 8001, 5100, 11434`
 
 * **Environment Variables:** *(Optional)*
 
@@ -66,7 +66,11 @@ Log into your RunPod dashboard and create a **New Template** with the following 
 
   * `ENABLE_OMNIVOICE` (default `true`) - Set to `false` to disable local TTS.
 
+  * `ENABLE_WHISPER` (default `true`) - Set to `false` to disable local STT.
+
   * `AUTO_PULL_MODEL` - Enter an Ollama model tag (e.g., `gemma4:26b`, `llama3`) to download automatically on boot.
+
+  * `ST_CONTEXT_SIZE` - Pre-configure SillyTavern's default Context Size (e.g., `32768`).
 
 ### Step 3: Deploy and Connect
 
@@ -80,11 +84,13 @@ Log into your RunPod dashboard and create a **New Template** with the following 
 
 ### Step 4: Configure SillyTavern inside the UI
 
-1. **Connect the LLM:** Go to the API connections tab, select "Chat Completion", choose "OpenAI-Compatible", and set the URL to `http://127.0.0.1:11434/v1`.
+1. **Connect the LLM:** Go to the API connections tab, set the "API Type" to **Ollama**, and set the Server URL to `http://127.0.0.1:11434`.
 
-2. **Connect the Voice:** Go to the Extensions/Audio tab. Select **OpenAI TTS** from the dropdown menu and set the API Endpoint URL to `http://127.0.0.1:8001/v1`.
+2. **Connect the Voice (TTS):** Go to the Extensions/Audio tab. Select **OpenAI TTS** from the Text-to-Speech dropdown menu and set the API Endpoint URL to `http://127.0.0.1:8001/v1`.
 
-3. Enable your microphone in SillyTavern, pick a character, and start talking!
+3. **Connect Speech-to-Text (STT):** Also in the Extensions/Audio tab, select **OpenAI STT** from the Speech-to-Text provider dropdown menu and set the API Endpoint URL to `http://127.0.0.1:5100/v1`.
+
+4. Enable your microphone in SillyTavern, pick a character, and start talking!
 
 ---
 

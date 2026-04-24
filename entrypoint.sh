@@ -64,6 +64,7 @@ echo "=== Booting Servers ==="
 # 5. Set default toggles to true if not specified by the user in RunPod
 ENABLE_OLLAMA=${ENABLE_OLLAMA:-"true"}
 ENABLE_OMNIVOICE=${ENABLE_OMNIVOICE:-"true"}
+ENABLE_WHISPER=${ENABLE_WHISPER:-"true"}
 ENABLE_JUPYTER=${ENABLE_JUPYTER:-"true"}
 
 # 6. Force all ML models and caches to the persistent drive
@@ -77,6 +78,9 @@ PIDS_TO_WAIT=""
 # 7. Start Ollama Daemon conditionally
 if [ "$ENABLE_OLLAMA" = "true" ] || [ "$ENABLE_OLLAMA" = "1" ]; then
     echo "Starting Ollama API on port 11434..."
+    export OLLAMA_KV_CACHE_TYPE=bf16
+    export OLLAMA_FLASH_ATTENTION=0
+    export OLLAMA_CONTEXT_LENGTH=65536
     ollama serve &
     OLLAMA_PID=$!
     PIDS_TO_WAIT="$PIDS_TO_WAIT $OLLAMA_PID"
@@ -99,6 +103,18 @@ if [ "$ENABLE_OMNIVOICE" = "true" ] || [ "$ENABLE_OMNIVOICE" = "1" ]; then
     PIDS_TO_WAIT="$PIDS_TO_WAIT $OMNI_PID"
 else
     echo "Skipping OmniVoice (ENABLE_OMNIVOICE is set to false)."
+fi
+
+# 8.5. Boot Whisper API conditionally on port 5100
+if [ "$ENABLE_WHISPER" = "true" ] || [ "$ENABLE_WHISPER" = "1" ]; then
+    echo "Starting Whisper API on port 5100..."
+    export WHISPER_PORT=5100
+    export WHISPER_HOST="0.0.0.0"
+    python3 /app/whisper_server.py &
+    WHISPER_PID=$!
+    PIDS_TO_WAIT="$PIDS_TO_WAIT $WHISPER_PID"
+else
+    echo "Skipping Whisper (ENABLE_WHISPER is set to false)."
 fi
 
 # 9. Boot JupyterLab conditionally
@@ -124,10 +140,54 @@ if [ -f "config.yaml" ]; then
     }
 fi
 
+# 10.5. Pre-configure SillyTavern Settings
+ST_USER_DIR="/workspace/st_data/default-user"
+ST_SETTINGS="$ST_USER_DIR/settings.json"
+
+echo "Injecting default SillyTavern settings..."
+mkdir -p "$ST_USER_DIR"
+
+if [ ! -f "$ST_SETTINGS" ]; then
+    if [ -f "/app/SillyTavern/default/content/settings.json" ]; then
+        cp /app/SillyTavern/default/content/settings.json "$ST_SETTINGS"
+    elif [ -f "/app/SillyTavern/default/settings.json" ]; then
+        cp /app/SillyTavern/default/settings.json "$ST_SETTINGS"
+    else
+        echo "Warning: Base settings.json template not found. Skipping auto-config to prevent UI corruption."
+        ST_SKIP_CONFIG="true"
+    fi
+fi
+
+if [ "$ST_SKIP_CONFIG" != "true" ]; then
+    JQ_FILTER="."
+    # if [ "$ENABLE_OLLAMA" = "true" ] || [ "$ENABLE_OLLAMA" = "1" ]; then
+    #     JQ_FILTER="$JQ_FILTER | .main_api=\"ollama\" | .api_server=\"http://127.0.0.1:11434\" | .ollama_settings = (.ollama_settings // {}) | .ollama_settings.server=\"http://127.0.0.1:11434\""
+    # fi
+    if [ -n "$ST_MAX_CONTEXT" ]; then
+        JQ_FILTER="$JQ_FILTER | .max_context=($ST_MAX_CONTEXT | tonumber)"
+    fi
+    if [ -n "$ST_AMOUNT_GEN" ]; then
+        JQ_FILTER="$JQ_FILTER | .amount_gen=($ST_AMOUNT_GEN | tonumber)"
+    fi
+    # if [ "$ENABLE_OMNIVOICE" = "true" ] || [ "$ENABLE_OMNIVOICE" = "1" ]; then
+    #     JQ_FILTER="$JQ_FILTER | .tts_provider=\"openai\" | .openai_tts_url=\"http://127.0.0.1:8001/v1\""
+    # fi
+    # if [ "$ENABLE_WHISPER" = "true" ] || [ "$ENABLE_WHISPER" = "1" ]; then
+    #     JQ_FILTER="$JQ_FILTER | .stt_provider=\"openai\" | .openai_stt_url=\"http://127.0.0.1:5100/v1\""
+    # fi
+
+    tmp=$(mktemp)
+    if jq "$JQ_FILTER" "$ST_SETTINGS" > "$tmp"; then
+        mv "$tmp" "$ST_SETTINGS"
+    else
+        echo "Failed to inject SillyTavern settings (jq error)."
+    fi
+fi
+
 # 11. Boot SillyTavern (Always runs)
 echo "Starting SillyTavern on port 8000..."
 cd /app/SillyTavern
-./start.sh &
+node server.js &
 SILLY_PID=$!
 PIDS_TO_WAIT="$PIDS_TO_WAIT $SILLY_PID"
 
