@@ -1,26 +1,41 @@
-# Runtime stage: minimal CUDA runtime with all services
-FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04
+# PyTorch's official runtime image: brings Python + torch + CUDA + cuDNN
+# preinstalled. Skips the slowest pip install we used to do, and closes the
+# cuDNN gap that the previous nvidia/cuda:12.8.0-runtime base image had.
+# Python lives in /opt/conda (already on PATH).
+FROM pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
-    SILLYTAVERN_LISTEN=true \
-    PATH="/app/venv/bin:$PATH"
+    SILLYTAVERN_LISTEN=true
 
 WORKDIR /app
 
-# Install runtime dependencies only (no build tools, no git, no gcc)
+# System runtime dependencies. Python/pip/torch/CUDA/cuDNN come from the
+# base image, so this is a pretty short list:
+# - curl: ollama installer + nodesource setup
+# - ffmpeg: audio decoding for faster-whisper / OmniVoice
+# - libsm6 / libxext6: shared deps some audio/CV libraries pull in
+# - jq: settings.json patching in entrypoint.sh
+# - ca-certificates: TLS roots (usually present, kept for safety)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 python3-venv curl ffmpeg libsm6 libxext6 jq pciutils zstd ca-certificates \
+    curl ffmpeg libsm6 libxext6 jq ca-certificates \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Create Python virtual environment for isolation
-RUN python3 -m venv /app/venv
-
-# Install uv and Python dependencies in one layer
-RUN /app/venv/bin/pip install --no-cache-dir --upgrade pip setuptools && \
-    /app/venv/bin/pip install --no-cache-dir uv && \
-    /app/venv/bin/uv pip install --system torch==2.8.0+cu128 torchaudio==2.8.0+cu128 --extra-index-url https://download.pytorch.org/whl/cu128 && \
-    /app/venv/bin/uv pip install --system omnivoice-server jupyterlab faster-whisper fastapi uvicorn python-multipart
+# Python dependencies via uv (much faster than pip). The base image's
+# Python is a Conda env at /opt/conda; uv's --system flag tells it to
+# install there directly rather than insisting on a venv.
+#
+# Versions pinned with stable major-version ranges. For fully reproducible
+# builds, run `uv pip compile` and check in a requirements.lock.
+# omnivoice-server is left unpinned: fast-moving, want latest fixes.
+RUN pip install --no-cache-dir uv && \
+    uv pip install --system \
+        omnivoice-server \
+        "jupyterlab>=4.0,<5" \
+        "faster-whisper>=1.0,<2" \
+        "fastapi>=0.110,<1" \
+        "uvicorn>=0.30,<1" \
+        "python-multipart>=0.0.9"
 
 # Install Node.js runtime (for running SillyTavern)
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
@@ -53,5 +68,12 @@ RUN sed -i 's/\r$//' /app/entrypoint.sh && \
     chmod +x /app/entrypoint.sh
 
 EXPOSE 8000 8001 5100 8888 11434
+
+# Healthcheck: SillyTavern requires Basic Auth so HTTP probes get 401s.
+# Use bash's /dev/tcp to verify the port is accepting connections instead.
+# The 120s start period gives Ollama / OmniVoice / Whisper time to load
+# their models on a cold pod before the check starts marking us unhealthy.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
+    CMD bash -c 'exec 3<>/dev/tcp/127.0.0.1/8000' || exit 1
 
 ENTRYPOINT ["/app/entrypoint.sh"]
