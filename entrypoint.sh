@@ -88,8 +88,22 @@ if [ "$ENABLE_OLLAMA" = "true" ] || [ "$ENABLE_OLLAMA" = "1" ]; then
     # Wait for daemon to initialize, then auto-pull model if requested
     if [ -n "$AUTO_PULL_MODEL" ]; then
         echo "Queuing auto-pull for Ollama model: $AUTO_PULL_MODEL..."
-        # Run in background to avoid blocking server boots
-        (sleep 5 && ollama pull "$AUTO_PULL_MODEL" && echo "Ollama pull complete: $AUTO_PULL_MODEL") &
+        # Run in background to avoid blocking server boots.
+        # Strip Ollama's TUI progress bars (per-blob percentages, manifest spinners,
+        # sha256 verification ticks) so container logs stay readable. PIPESTATUS[0]
+        # preserves ollama's exit code through the grep pipe so we don't falsely
+        # report success on failure.
+        (
+            sleep 5
+            ollama pull "$AUTO_PULL_MODEL" 2>&1 | \
+                grep --line-buffered -avE '(pulling [0-9a-f]{12}:|pulling manifest|verifying sha256 digest|writing manifest)'
+            rc=${PIPESTATUS[0]}
+            if [ "$rc" -eq 0 ]; then
+                echo "Ollama pull complete: $AUTO_PULL_MODEL"
+            else
+                echo "Ollama pull FAILED (exit $rc): $AUTO_PULL_MODEL"
+            fi
+        ) &
     fi
 else
     echo "Skipping Ollama (ENABLE_OLLAMA is set to false)."
@@ -120,7 +134,15 @@ fi
 # 9. Boot JupyterLab conditionally
 if [ "$ENABLE_JUPYTER" = "true" ] || [ "$ENABLE_JUPYTER" = "1" ]; then
     echo "Starting JupyterLab on port 8888..."
-    jupyter lab --allow-root --ip=0.0.0.0 --port=8888 --no-browser --NotebookApp.token='' --NotebookApp.password='' --notebook-dir=/workspace &
+    # Use modern ServerApp.* options (NotebookApp.* is deprecated in jupyter_server 2.0).
+    # allow_origin / allow_remote_access / disable_check_xsrf are required so the
+    # RunPod proxy (https://<pod>-8888.proxy.runpod.net) isn't blocked as cross-origin.
+    jupyter lab --allow-root --ip=0.0.0.0 --port=8888 --no-browser \
+        --ServerApp.token='' --ServerApp.password='' \
+        --ServerApp.allow_origin='*' \
+        --ServerApp.allow_remote_access=True \
+        --ServerApp.disable_check_xsrf=True \
+        --notebook-dir=/workspace &
     JUPYTER_PID=$!
     PIDS_TO_WAIT="$PIDS_TO_WAIT $JUPYTER_PID"
 else
