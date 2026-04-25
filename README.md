@@ -58,9 +58,11 @@ Log into your RunPod dashboard and create a **New Template** with the following 
 
 * **Volume Disk:** `50 GB+` (Required to store the OmniVoice HuggingFace models, Ollama LLMs, and chat history. Recommend more if downloading large models).
 
-* **Exposed TCP Ports:** `8000, 8001, 5100, 11434`
+* **Exposed TCP Ports:** `8000, 8001, 5100, 8888, 11434`
 
 * **Environment Variables:** *(Optional)*
+
+  * `JUPYTER_PASSWORD` - Set a password to automatically enable JupyterLab and the "Connect to Jupyter" button (RunPod hides the Jupyter checkbox for custom templates).
 
   * `ENABLE_OLLAMA` (default `true`) - Set to `false` to disable the local LLM.
 
