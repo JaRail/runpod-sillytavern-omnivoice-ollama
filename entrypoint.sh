@@ -5,12 +5,13 @@
 set -eo pipefail
 
 # 0. Install signal handling early, before any service starts. PIDS_TO_WAIT
-# is appended to as services launch; cleanup is a no-op if it's still empty
-# when a signal arrives.
-PIDS_TO_WAIT=""
+# is a bash array appended to as services launch; cleanup is a no-op if
+# it's still empty when a signal arrives. (Array form keeps PIDs as
+# distinct args to kill/wait — important for shellcheck SC2086 too.)
+PIDS_TO_WAIT=()
 cleanup() {
-    if [ -n "$PIDS_TO_WAIT" ]; then
-        kill $PIDS_TO_WAIT 2>/dev/null || true
+    if [ ${#PIDS_TO_WAIT[@]} -gt 0 ]; then
+        kill "${PIDS_TO_WAIT[@]}" 2>/dev/null || true
     fi
 }
 trap cleanup SIGINT SIGTERM
@@ -137,7 +138,7 @@ if [ "$ENABLE_OLLAMA" = "true" ] || [ "$ENABLE_OLLAMA" = "1" ]; then
     export OLLAMA_CONTEXT_LENGTH=65536
     ollama serve &
     OLLAMA_PID=$!
-    PIDS_TO_WAIT="$PIDS_TO_WAIT $OLLAMA_PID"
+    PIDS_TO_WAIT+=("$OLLAMA_PID")
     
     # Wait for daemon to initialize, then auto-pull model if requested
     if [ -n "$AUTO_PULL_MODEL" ]; then
@@ -146,7 +147,7 @@ if [ "$ENABLE_OLLAMA" = "true" ] || [ "$ENABLE_OLLAMA" = "1" ]; then
         # API instead of using a fixed sleep — cold pods with slow disk can
         # take well over 5s before ollama serve is ready to accept requests.
         (
-            for i in $(seq 1 60); do
+            for _ in $(seq 1 60); do
                 if curl -sf http://127.0.0.1:11434/api/version >/dev/null 2>&1; then
                     break
                 fi
@@ -168,7 +169,7 @@ if [ "$ENABLE_OMNIVOICE" = "true" ] || [ "$ENABLE_OMNIVOICE" = "1" ]; then
     echo "Starting OmniVoice API on port 8001..."
     OMNIVOICE_PORT=8001 omnivoice-server --host 0.0.0.0 --device cuda &
     OMNI_PID=$!
-    PIDS_TO_WAIT="$PIDS_TO_WAIT $OMNI_PID"
+    PIDS_TO_WAIT+=("$OMNI_PID")
 else
     echo "Skipping OmniVoice (ENABLE_OMNIVOICE is set to false)."
 fi
@@ -180,7 +181,7 @@ if [ "$ENABLE_WHISPER" = "true" ] || [ "$ENABLE_WHISPER" = "1" ]; then
     export WHISPER_HOST="0.0.0.0"
     python3 /app/whisper_server.py &
     WHISPER_PID=$!
-    PIDS_TO_WAIT="$PIDS_TO_WAIT $WHISPER_PID"
+    PIDS_TO_WAIT+=("$WHISPER_PID")
 else
     echo "Skipping Whisper (ENABLE_WHISPER is set to false)."
 fi
@@ -204,7 +205,7 @@ if [ "$ENABLE_JUPYTER" = "true" ] || [ "$ENABLE_JUPYTER" = "1" ]; then
             --ServerApp.password="$JUPYTER_HASH" \
             --notebook-dir=/workspace &
         JUPYTER_PID=$!
-        PIDS_TO_WAIT="$PIDS_TO_WAIT $JUPYTER_PID"
+        PIDS_TO_WAIT+=("$JUPYTER_PID")
     fi
 else
     echo "Skipping JupyterLab (ENABLE_JUPYTER is set to false)."
@@ -278,12 +279,12 @@ echo "Starting SillyTavern on port 8000..."
 cd /app/SillyTavern
 node server.js &
 SILLY_PID=$!
-PIDS_TO_WAIT="$PIDS_TO_WAIT $SILLY_PID"
+PIDS_TO_WAIT+=("$SILLY_PID")
 
 echo "Systems nominal. Servers are running."
 
 # 12. Use 'wait -n' so if ANY server crashes (e.g. ST out-of-memory) the
 # whole container safely stops. The SIGINT/SIGTERM trap was already set
 # at the top of this script — see the cleanup() function.
-wait -n $PIDS_TO_WAIT || true
+wait -n "${PIDS_TO_WAIT[@]}" || true
 cleanup

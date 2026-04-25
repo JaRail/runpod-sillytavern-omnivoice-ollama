@@ -8,6 +8,12 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     SILLYTAVERN_LISTEN=true
 
+# Use bash with pipefail for all RUN commands. Without this, a failed
+# `curl ... | sh` (network blip, 404 on the install script) leaves the
+# pipeline exit status at 0 because sh succeeded, and the installer never
+# actually runs. Catches a real class of silent build bug.
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
 WORKDIR /app
 
 # System runtime dependencies. Python/pip/torch/CUDA/cuDNN come from the
@@ -17,6 +23,11 @@ WORKDIR /app
 # - libsm6 / libxext6: shared deps some audio/CV libraries pull in
 # - jq: settings.json patching in entrypoint.sh
 # - ca-certificates: TLS roots (usually present, kept for safety)
+#
+# Not pinning apt versions: the base image is already pinned (which fixes
+# the Ubuntu repo state at build time), and pinning each utility creates
+# ongoing maintenance churn for marginal security benefit.
+# hadolint ignore=DL3008
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ffmpeg libsm6 libxext6 jq ca-certificates \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
@@ -28,7 +39,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Versions pinned with stable major-version ranges. For fully reproducible
 # builds, run `uv pip compile` and check in a requirements.lock.
 # omnivoice-server is left unpinned: fast-moving, want latest fixes.
-RUN pip install --no-cache-dir uv && \
+RUN pip install --no-cache-dir "uv>=0.4,<1" && \
     uv pip install --system \
         omnivoice-server \
         "jupyterlab>=4.0,<5" \
@@ -37,7 +48,8 @@ RUN pip install --no-cache-dir uv && \
         "uvicorn>=0.30,<1" \
         "python-multipart>=0.0.9"
 
-# Install Node.js runtime (for running SillyTavern)
+# Install Node.js runtime (for running SillyTavern).
+# hadolint ignore=DL3008
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get install -y --no-install-recommends nodejs && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
@@ -49,6 +61,7 @@ RUN curl -fsSL https://ollama.com/install.sh | sh
 # with custom OmniVoice-related changes that aren't upstream yet).
 # Build with:
 #   docker build --build-context sillytavern=../sillytavern -t <image> .
+# hadolint ignore=DL3022
 COPY --from=sillytavern . /app/SillyTavern
 #
 # Once the custom changes are upstreamed, replace the COPY above with the
@@ -59,7 +72,9 @@ COPY --from=sillytavern . /app/SillyTavern
 # RUN curl -fsSL https://github.com/SillyTavern/SillyTavern/archive/refs/heads/release.tar.gz \
 #     | tar -xz -C /app && mv /app/SillyTavern-release /app/SillyTavern
 #
-RUN cd /app/SillyTavern && npm ci --omit=dev
+WORKDIR /app/SillyTavern
+RUN npm ci --omit=dev
+WORKDIR /app
 
 # Copy application files
 COPY entrypoint.sh /app/
