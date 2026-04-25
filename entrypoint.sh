@@ -30,32 +30,71 @@ if [ ! -L "./plugins" ]; then
     ln -s /workspace/st_plugins ./plugins
 fi
 
-# Handle config.yaml and secrets.json files
+# Handle config.yaml and secrets.json files.
+#
+# First-run logic: if the workspace doesn't have the file yet, seed it from a
+# template shipped in the SillyTavern source (preferring *.example, which is
+# what ST normally ships). If no template exists, we leave the workspace path
+# absent and just create the symlink — SillyTavern will create the real file
+# at the symlink target on first write. We do NOT touch an empty file: an
+# empty config.yaml prevents SillyTavern from regenerating its defaults.
 for file in config.yaml secrets.json; do
-    if [ ! -f "/workspace/$file" ] && [ -f "./$file" ]; then
-        cp "./$file" "/workspace/$file"
-    elif [ ! -f "/workspace/$file" ]; then
-        touch "/workspace/$file"
+    if [ ! -f "/workspace/$file" ]; then
+        if [ -f "./$file.example" ]; then
+            cp "./$file.example" "/workspace/$file"
+        elif [ -f "./$file" ]; then
+            cp "./$file" "/workspace/$file"
+        fi
+        # else: leave /workspace/$file absent — symlink will be a dangling
+        # target, and SillyTavern will create the file on first write.
     fi
     rm -f "./$file"
     ln -s "/workspace/$file" "./$file"
 done
 
 echo "=== Configuring SillyTavern Security ==="
-# 3. Ensure SillyTavern binds to 0.0.0.0 for RunPod Proxy
-if ! grep -q "listen: true" /workspace/config.yaml; then
-    sed -i 's/listen: false/listen: true/g' /workspace/config.yaml 2>/dev/null || echo "listen: true" >> /workspace/config.yaml
+# 3. Ensure SillyTavern binds to 0.0.0.0 for RunPod Proxy.
+# Only edit config.yaml if it actually exists (it may not on a fresh install
+# where SillyTavern hasn't generated it yet — that's handled by the
+# SILLYTAVERN_LISTEN env var baked into the Dockerfile).
+if [ -f /workspace/config.yaml ]; then
+    if grep -q "^listen:" /workspace/config.yaml; then
+        sed -i 's/^listen: .*/listen: true/' /workspace/config.yaml
+    else
+        echo "listen: true" >> /workspace/config.yaml
+    fi
 fi
 
-# 4. Automatically disable whitelist mode so the RunPod web UI is accessible
+# 4. Automatically disable whitelist mode and configure Basic Auth.
+# Defaulting to admin/password is unsafe on a publicly proxied port, so:
+#   - if neither ST_USER nor ST_PASS is set, generate a random password and
+#     print it to logs so the user can grab it from RunPod's log viewer;
+#   - if only one half is provided, refuse to start rather than silently
+#     fall back to a weak default.
+if [ -z "$ST_USER" ] && [ -z "$ST_PASS" ]; then
+    ST_USER="admin"
+    ST_PASS=$(head -c 18 /dev/urandom | base64 | tr -d '/+=' | head -c 24)
+    echo "===================================================================="
+    echo "ST_USER / ST_PASS were not set. Generated random credentials:"
+    echo "  Username: $ST_USER"
+    echo "  Password: $ST_PASS"
+    echo "Set ST_USER and ST_PASS env vars in RunPod to use your own values."
+    echo "===================================================================="
+elif [ -z "$ST_PASS" ]; then
+    echo "ERROR: ST_USER is set but ST_PASS is not. Refusing to start with a default password." >&2
+    echo "  Set ST_PASS env var, or unset ST_USER to auto-generate credentials." >&2
+    exit 1
+elif [ -z "$ST_USER" ]; then
+    ST_USER="admin"
+fi
+
 if [ -f "config.yaml" ]; then
     sed -i 's/whitelistMode: true/whitelistMode: false/g' config.yaml
 
-    # Enable Basic Auth and inject credentials from RunPod environment variables
-    # (Using default fallbacks if the user left them blank)
+    # Enable Basic Auth and inject credentials.
     sed -i 's/basicAuthMode: false/basicAuthMode: true/g' config.yaml
-    sed -i "s/basicAuthUser: .*/basicAuthUser: '${ST_USER:-admin}'/g" config.yaml
-    sed -i "s/basicAuthPass: .*/basicAuthPass: '${ST_PASS:-password}'/g" config.yaml
+    sed -i "s/basicAuthUser: .*/basicAuthUser: '${ST_USER}'/g" config.yaml
+    sed -i "s/basicAuthPass: .*/basicAuthPass: '${ST_PASS}'/g" config.yaml
 fi
 
 
@@ -88,8 +127,22 @@ if [ "$ENABLE_OLLAMA" = "true" ] || [ "$ENABLE_OLLAMA" = "1" ]; then
     # Wait for daemon to initialize, then auto-pull model if requested
     if [ -n "$AUTO_PULL_MODEL" ]; then
         echo "Queuing auto-pull for Ollama model: $AUTO_PULL_MODEL..."
-        # Run in background to avoid blocking server boots
-        (sleep 5 && ollama pull "$AUTO_PULL_MODEL" && echo "Ollama pull complete: $AUTO_PULL_MODEL") &
+        # Run in background to avoid blocking server boots. Poll the Ollama
+        # API instead of using a fixed sleep — cold pods with slow disk can
+        # take well over 5s before ollama serve is ready to accept requests.
+        (
+            for i in $(seq 1 60); do
+                if curl -sf http://127.0.0.1:11434/api/version >/dev/null 2>&1; then
+                    break
+                fi
+                sleep 1
+            done
+            if curl -sf http://127.0.0.1:11434/api/version >/dev/null 2>&1; then
+                ollama pull "$AUTO_PULL_MODEL" && echo "Ollama pull complete: $AUTO_PULL_MODEL"
+            else
+                echo "Ollama API never became ready; skipping auto-pull of $AUTO_PULL_MODEL."
+            fi
+        ) &
     fi
 else
     echo "Skipping Ollama (ENABLE_OLLAMA is set to false)."
@@ -117,12 +170,27 @@ else
     echo "Skipping Whisper (ENABLE_WHISPER is set to false)."
 fi
 
-# 9. Boot JupyterLab conditionally
+# 9. Boot JupyterLab conditionally.
+# JupyterLab's port is publicly proxied by RunPod, so we MUST require auth.
+# If JUPYTER_PASSWORD isn't set, we skip Jupyter entirely rather than expose
+# an unauthenticated root shell on /workspace.
 if [ "$ENABLE_JUPYTER" = "true" ] || [ "$ENABLE_JUPYTER" = "1" ]; then
-    echo "Starting JupyterLab on port 8888..."
-    jupyter lab --allow-root --ip=0.0.0.0 --port=8888 --no-browser --NotebookApp.token='' --NotebookApp.password='' --notebook-dir=/workspace &
-    JUPYTER_PID=$!
-    PIDS_TO_WAIT="$PIDS_TO_WAIT $JUPYTER_PID"
+    if [ -z "$JUPYTER_PASSWORD" ]; then
+        echo "Skipping JupyterLab: ENABLE_JUPYTER=true but JUPYTER_PASSWORD is not set."
+        echo "  Set JUPYTER_PASSWORD env var in RunPod to enable JupyterLab."
+    else
+        echo "Starting JupyterLab on port 8888..."
+        # Hash the password using Jupyter's own helper so we can pass it via
+        # ServerApp.password (the plaintext never lands on disk).
+        JUPYTER_HASH=$(JUPYTER_PASSWORD="$JUPYTER_PASSWORD" python3 -c \
+            "import os; from jupyter_server.auth import passwd; print(passwd(os.environ['JUPYTER_PASSWORD']))")
+        jupyter lab --allow-root --ip=0.0.0.0 --port=8888 --no-browser \
+            --ServerApp.token='' \
+            --ServerApp.password="$JUPYTER_HASH" \
+            --notebook-dir=/workspace &
+        JUPYTER_PID=$!
+        PIDS_TO_WAIT="$PIDS_TO_WAIT $JUPYTER_PID"
+    fi
 else
     echo "Skipping JupyterLab (ENABLE_JUPYTER is set to false)."
 fi
@@ -163,8 +231,11 @@ if [ "$ST_SKIP_CONFIG" != "true" ]; then
     # if [ "$ENABLE_OLLAMA" = "true" ] || [ "$ENABLE_OLLAMA" = "1" ]; then
     #     JQ_FILTER="$JQ_FILTER | .main_api=\"ollama\" | .api_server=\"http://127.0.0.1:11434\" | .ollama_settings = (.ollama_settings // {}) | .ollama_settings.server=\"http://127.0.0.1:11434\""
     # fi
-    if [ -n "$ST_MAX_CONTEXT" ]; then
-        JQ_FILTER="$JQ_FILTER | .max_context=($ST_MAX_CONTEXT | tonumber)"
+    # Accept ST_CONTEXT_SIZE (documented in README) as the primary name,
+    # and keep ST_MAX_CONTEXT as a backward-compat alias for now.
+    ST_CONTEXT_VAL="${ST_CONTEXT_SIZE:-$ST_MAX_CONTEXT}"
+    if [ -n "$ST_CONTEXT_VAL" ]; then
+        JQ_FILTER="$JQ_FILTER | .max_context=($ST_CONTEXT_VAL | tonumber)"
     fi
     if [ -n "$ST_AMOUNT_GEN" ]; then
         JQ_FILTER="$JQ_FILTER | .amount_gen=($ST_AMOUNT_GEN | tonumber)"
