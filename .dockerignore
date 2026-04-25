@@ -1,9 +1,25 @@
+# VCS
 .git
 .gitignore
-.dockerignore
+.gitattributes
+
+# Project metadata not needed inside the image
+LICENSE
+*.md
+
+# Local model and data caches that should never be baked in
 __pycache__
 omnivoice_models/
 ollama_models/
 st_data/
 st_plugins/
-README.md
+
+# Editor / OS junk
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*.swo
+
+# Self
+.dockerignore

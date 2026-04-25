@@ -1,5 +1,20 @@
 #!/bin/bash
-set -e
+# -e: exit on error. -o pipefail: a failed command in a pipeline fails the whole pipe.
+# (Skipping -u: too many of our env vars are intentionally optional and the
+# extra `${VAR:-}` boilerplate isn't worth the noise.)
+set -eo pipefail
+
+# 0. Install signal handling early, before any service starts. PIDS_TO_WAIT
+# is a bash array appended to as services launch; cleanup is a no-op if
+# it's still empty when a signal arrives. (Array form keeps PIDs as
+# distinct args to kill/wait — important for shellcheck SC2086 too.)
+PIDS_TO_WAIT=()
+cleanup() {
+    if [ ${#PIDS_TO_WAIT[@]} -gt 0 ]; then
+        kill "${PIDS_TO_WAIT[@]}" 2>/dev/null || true
+    fi
+}
+trap cleanup SIGINT SIGTERM
 
 echo "=== Initializing Workspace Persistence ==="
 # 1. Create all necessary persistent directories
@@ -7,7 +22,7 @@ mkdir -p /workspace/st_data
 mkdir -p /workspace/st_plugins
 mkdir -p /workspace/omnivoice_models
 export OLLAMA_MODELS="/workspace/ollama_models"
-mkdir -p $OLLAMA_MODELS
+mkdir -p "$OLLAMA_MODELS"
 
 # 2. Safely symlink SillyTavern persistent directories
 cd /app/SillyTavern
@@ -21,41 +36,83 @@ if [ ! -L "./data" ]; then
     ln -s /workspace/st_data ./data
 fi
 
-# Handle /plugins
+# Handle /plugins. Mirror the data behaviour: only seed from the image if
+# the workspace directory is empty. Otherwise we'd clobber user-installed
+# plugins every time the container restarts after an image update.
 if [ ! -L "./plugins" ]; then
-    if [ -d "./plugins" ]; then
+    if [ -d "./plugins" ] && [ -z "$(ls -A /workspace/st_plugins 2>/dev/null)" ]; then
         cp -a ./plugins/* /workspace/st_plugins/ 2>/dev/null || true
     fi
     rm -rf ./plugins
     ln -s /workspace/st_plugins ./plugins
 fi
 
-# Handle config.yaml and secrets.json files
+# Handle config.yaml and secrets.json files.
+#
+# First-run logic: if the workspace doesn't have the file yet, seed it from a
+# template shipped in the SillyTavern source (preferring *.example, which is
+# what ST normally ships). If no template exists, we leave the workspace path
+# absent and just create the symlink — SillyTavern will create the real file
+# at the symlink target on first write. We do NOT touch an empty file: an
+# empty config.yaml prevents SillyTavern from regenerating its defaults.
 for file in config.yaml secrets.json; do
-    if [ ! -f "/workspace/$file" ] && [ -f "./$file" ]; then
-        cp "./$file" "/workspace/$file"
-    elif [ ! -f "/workspace/$file" ]; then
-        touch "/workspace/$file"
+    if [ ! -f "/workspace/$file" ]; then
+        if [ -f "./$file.example" ]; then
+            cp "./$file.example" "/workspace/$file"
+        elif [ -f "./$file" ]; then
+            cp "./$file" "/workspace/$file"
+        fi
+        # else: leave /workspace/$file absent — symlink will be a dangling
+        # target, and SillyTavern will create the file on first write.
     fi
     rm -f "./$file"
     ln -s "/workspace/$file" "./$file"
 done
 
 echo "=== Configuring SillyTavern Security ==="
-# 3. Ensure SillyTavern binds to 0.0.0.0 for RunPod Proxy
-if ! grep -q "listen: true" /workspace/config.yaml; then
-    sed -i 's/listen: false/listen: true/g' /workspace/config.yaml 2>/dev/null || echo "listen: true" >> /workspace/config.yaml
+# 3. Ensure SillyTavern binds to 0.0.0.0 for RunPod Proxy.
+# Only edit config.yaml if it actually exists (it may not on a fresh install
+# where SillyTavern hasn't generated it yet — that's handled by the
+# SILLYTAVERN_LISTEN env var baked into the Dockerfile).
+if [ -f /workspace/config.yaml ]; then
+    if grep -q "^listen:" /workspace/config.yaml; then
+        sed -i 's/^listen: .*/listen: true/' /workspace/config.yaml
+    else
+        echo "listen: true" >> /workspace/config.yaml
+    fi
 fi
 
-# 4. Automatically disable whitelist mode so the RunPod web UI is accessible
+# 4. Automatically disable whitelist mode and configure Basic Auth.
+# Defaulting to admin/password is unsafe on a publicly proxied port, so:
+#   - if neither ST_USER nor ST_PASS is set, generate a random password and
+#     print it to logs so the user can grab it from RunPod's log viewer;
+#   - if only one half is provided, refuse to start rather than silently
+#     fall back to a weak default.
+if [ -z "$ST_USER" ] && [ -z "$ST_PASS" ]; then
+    ST_USER="admin"
+    # Generate via python to avoid bash pipefail+SIGPIPE quirks with `head -c`.
+    ST_PASS=$(python3 -c "import secrets, string; print(''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(24)))")
+    echo "===================================================================="
+    echo "ST_USER / ST_PASS were not set. Generated random credentials:"
+    echo "  Username: $ST_USER"
+    echo "  Password: $ST_PASS"
+    echo "Set ST_USER and ST_PASS env vars in RunPod to use your own values."
+    echo "===================================================================="
+elif [ -z "$ST_PASS" ]; then
+    echo "ERROR: ST_USER is set but ST_PASS is not. Refusing to start with a default password." >&2
+    echo "  Set ST_PASS env var, or unset ST_USER to auto-generate credentials." >&2
+    exit 1
+elif [ -z "$ST_USER" ]; then
+    ST_USER="admin"
+fi
+
 if [ -f "config.yaml" ]; then
     sed -i 's/whitelistMode: true/whitelistMode: false/g' config.yaml
 
-    # Enable Basic Auth and inject credentials from RunPod environment variables
-    # (Using default fallbacks if the user left them blank)
+    # Enable Basic Auth and inject credentials.
     sed -i 's/basicAuthMode: false/basicAuthMode: true/g' config.yaml
-    sed -i "s/basicAuthUser: .*/basicAuthUser: '${ST_USER:-admin}'/g" config.yaml
-    sed -i "s/basicAuthPass: .*/basicAuthPass: '${ST_PASS:-password}'/g" config.yaml
+    sed -i "s/basicAuthUser: .*/basicAuthUser: '${ST_USER}'/g" config.yaml
+    sed -i "s/basicAuthPass: .*/basicAuthPass: '${ST_PASS}'/g" config.yaml
 fi
 
 
@@ -73,8 +130,6 @@ export TORCH_HOME="/workspace/torch_cache"
 export XDG_CACHE_HOME="/workspace/general_cache"
 export OLLAMA_HOST="0.0.0.0"
 
-PIDS_TO_WAIT=""
-
 # 7. Start Ollama Daemon conditionally
 if [ "$ENABLE_OLLAMA" = "true" ] || [ "$ENABLE_OLLAMA" = "1" ]; then
     echo "Starting Ollama API on port 11434..."
@@ -83,7 +138,7 @@ if [ "$ENABLE_OLLAMA" = "true" ] || [ "$ENABLE_OLLAMA" = "1" ]; then
     export OLLAMA_CONTEXT_LENGTH=65536
     ollama serve &
     OLLAMA_PID=$!
-    PIDS_TO_WAIT="$PIDS_TO_WAIT $OLLAMA_PID"
+    PIDS_TO_WAIT+=("$OLLAMA_PID")
     
     # Wait for daemon to initialize, then auto-pull model if requested
     if [ -n "$AUTO_PULL_MODEL" ]; then
@@ -114,7 +169,7 @@ if [ "$ENABLE_OMNIVOICE" = "true" ] || [ "$ENABLE_OMNIVOICE" = "1" ]; then
     echo "Starting OmniVoice API on port 8001..."
     OMNIVOICE_PORT=8001 omnivoice-server --host 0.0.0.0 --device cuda &
     OMNI_PID=$!
-    PIDS_TO_WAIT="$PIDS_TO_WAIT $OMNI_PID"
+    PIDS_TO_WAIT+=("$OMNI_PID")
 else
     echo "Skipping OmniVoice (ENABLE_OMNIVOICE is set to false)."
 fi
@@ -126,12 +181,15 @@ if [ "$ENABLE_WHISPER" = "true" ] || [ "$ENABLE_WHISPER" = "1" ]; then
     export WHISPER_HOST="0.0.0.0"
     python3 /app/whisper_server.py &
     WHISPER_PID=$!
-    PIDS_TO_WAIT="$PIDS_TO_WAIT $WHISPER_PID"
+    PIDS_TO_WAIT+=("$WHISPER_PID")
 else
     echo "Skipping Whisper (ENABLE_WHISPER is set to false)."
 fi
 
-# 9. Boot JupyterLab conditionally
+# 9. Boot JupyterLab conditionally.
+# JupyterLab's port is publicly proxied by RunPod, so we MUST require auth.
+# If JUPYTER_PASSWORD isn't set, we skip Jupyter entirely rather than expose
+# an unauthenticated root shell on /workspace.
 if [ "$ENABLE_JUPYTER" = "true" ] || [ "$ENABLE_JUPYTER" = "1" ]; then
     echo "Starting JupyterLab on port 8888..."
     # Use modern ServerApp.* options (NotebookApp.* is deprecated in jupyter_server 2.0).
@@ -182,21 +240,27 @@ fi
 
 if [ "$ST_SKIP_CONFIG" != "true" ]; then
     JQ_FILTER="."
-    # if [ "$ENABLE_OLLAMA" = "true" ] || [ "$ENABLE_OLLAMA" = "1" ]; then
-    #     JQ_FILTER="$JQ_FILTER | .main_api=\"ollama\" | .api_server=\"http://127.0.0.1:11434\" | .ollama_settings = (.ollama_settings // {}) | .ollama_settings.server=\"http://127.0.0.1:11434\""
-    # fi
-    if [ -n "$ST_MAX_CONTEXT" ]; then
-        JQ_FILTER="$JQ_FILTER | .max_context=($ST_MAX_CONTEXT | tonumber)"
+
+    # Accept ST_CONTEXT_SIZE (documented in README) as the primary name,
+    # and keep ST_MAX_CONTEXT as a backward-compat alias for now.
+    ST_CONTEXT_VAL="${ST_CONTEXT_SIZE:-$ST_MAX_CONTEXT}"
+    if [ -n "$ST_CONTEXT_VAL" ]; then
+        JQ_FILTER="$JQ_FILTER | .max_context=($ST_CONTEXT_VAL | tonumber)"
     fi
     if [ -n "$ST_AMOUNT_GEN" ]; then
         JQ_FILTER="$JQ_FILTER | .amount_gen=($ST_AMOUNT_GEN | tonumber)"
     fi
-    # if [ "$ENABLE_OMNIVOICE" = "true" ] || [ "$ENABLE_OMNIVOICE" = "1" ]; then
-    #     JQ_FILTER="$JQ_FILTER | .tts_provider=\"openai\" | .openai_tts_url=\"http://127.0.0.1:8001/v1\""
-    # fi
-    # if [ "$ENABLE_WHISPER" = "true" ] || [ "$ENABLE_WHISPER" = "1" ]; then
-    #     JQ_FILTER="$JQ_FILTER | .stt_provider=\"openai\" | .openai_stt_url=\"http://127.0.0.1:5100/v1\""
-    # fi
+
+    # NOTE: Auto-wiring SillyTavern's API/TTS/STT providers from the
+    # entrypoint is intentionally NOT done. SillyTavern's settings.json
+    # schema drifts between releases, and writing keys that the current
+    # version doesn't recognize tends to corrupt the UI on load. Users
+    # configure these once via the SillyTavern UI; the relevant URLs are
+    # documented in the README. If you want to revisit this, the four
+    # filters that previously lived here were:
+    #   - main_api / api_server / ollama_settings.server (Ollama)
+    #   - tts_provider / openai_tts_url (OmniVoice via OpenAI-compat TTS)
+    #   - stt_provider / openai_stt_url (Whisper via OpenAI-compat STT)
 
     tmp=$(mktemp)
     if jq "$JQ_FILTER" "$ST_SETTINGS" > "$tmp"; then
@@ -211,13 +275,12 @@ echo "Starting SillyTavern on port 8000..."
 cd /app/SillyTavern
 node server.js &
 SILLY_PID=$!
-PIDS_TO_WAIT="$PIDS_TO_WAIT $SILLY_PID"
+PIDS_TO_WAIT+=("$SILLY_PID")
 
 echo "Systems nominal. Servers are running."
 
-# 12. Graceful shutdown handling for RunPod stop requests
-trap "kill $PIDS_TO_WAIT" SIGINT SIGTERM
-
-# 13. Use 'wait -n' so if ANY server crashes (like ST out-of-memory), the whole container safely stops
-wait -n $PIDS_TO_WAIT || true
-kill $PIDS_TO_WAIT 2>/dev/null || true
+# 12. Use 'wait -n' so if ANY server crashes (e.g. ST out-of-memory) the
+# whole container safely stops. The SIGINT/SIGTERM trap was already set
+# at the top of this script — see the cleanup() function.
+wait -n "${PIDS_TO_WAIT[@]}" || true
+cleanup
