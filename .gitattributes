@@ -1,0 +1,32 @@
+# Auto-detect text files and normalize line endings on commit.
+* text=auto
+
+# Force LF on files that run inside the Linux container.
+# Without this, git on Windows can convert these to CRLF, which breaks
+# the shebang on shell scripts ("exec format error") and similar issues
+# in Python and Dockerfile contexts.
+*.sh            text eol=lf
+*.py            text eol=lf
+*.yaml          text eol=lf
+*.yml           text eol=lf
+*.json          text eol=lf
+Dockerfile      text eol=lf
+entrypoint.sh   text eol=lf
+.dockerignore   text eol=lf
+.gitignore      text eol=lf
+
+# Markdown can stay CRLF on Windows checkouts; safe either way.
+*.md            text
+
+# Binary files: never touch.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.zip   binary
+*.tar   binary
+*.gz    binary
+*.tgz   binary
+*.bin   binary
+*.exe   binary

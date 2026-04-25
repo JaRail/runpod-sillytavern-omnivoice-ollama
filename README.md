@@ -20,6 +20,7 @@ This repository gives you a fully self-hosted, private AI voice chat environment
 .
 ├── Dockerfile              # The optimized build instructions for the container
 ├── entrypoint.sh           # Handles volume mounting, config persistence, and server boot
+├── whisper_server.py       # Minimal OpenAI-compatible STT server wrapping faster-whisper
 ├── .dockerignore           # Prevents local models/data from bloating the image build
 └── .gitignore              
 ```
@@ -32,15 +33,21 @@ You will need to build this Docker image and push it to a container registry lik
 
 1. Clone this repository to your local machine (or a build server).
 
-2. Authenticate with Docker Hub: `docker login`
-
-3. Build the image (using your lowercase Docker Hub username):
+2. Check out SillyTavern as a sibling directory (the Dockerfile currently consumes a local copy via a named build context so we can ship in-progress OmniVoice-related changes that aren't upstream yet):
 
    ```
-   docker build -t jarail/sillytavern-omnivoice-ollama:latest .
+   git clone https://github.com/SillyTavern/SillyTavern.git ../sillytavern
    ```
 
-4. Push the image to your registry:
+3. Authenticate with Docker Hub: `docker login`
+
+4. Build the image (using your lowercase Docker Hub username). The `--build-context` flag wires the sibling SillyTavern checkout into the `COPY --from=sillytavern` line in the Dockerfile:
+
+   ```
+   docker build --build-context sillytavern=../sillytavern -t jarail/sillytavern-omnivoice-ollama:latest .
+   ```
+
+5. Push the image to your registry:
 
    ```
    docker push jarail/sillytavern-omnivoice-ollama:latest
@@ -60,9 +67,15 @@ Log into your RunPod dashboard and create a **New Template** with the following 
 
 * **Exposed TCP Ports:** `8000, 8001, 5100, 8888, 11434`
 
-* **Environment Variables:** *(Optional)*
+* **Environment Variables:**
 
-  * `JUPYTER_PASSWORD` - Set a password to automatically enable JupyterLab and the "Connect to Jupyter" button (RunPod hides the Jupyter checkbox for custom templates).
+  **Authentication (recommended to set):**
+
+  * `ST_USER` / `ST_PASS` - Basic Auth credentials for the SillyTavern web UI. **If both are unset, a random 24-character password is generated on boot and printed to the pod logs** (Username: `admin`). If you set one, you must set the other — the container will refuse to start with a half-configured login.
+
+  * `JUPYTER_PASSWORD` - **Required** to enable JupyterLab. Without it, the Jupyter service is skipped (an unauthenticated Jupyter on a publicly proxied port would expose root access to `/workspace`).
+
+  **Service toggles:**
 
   * `ENABLE_OLLAMA` (default `true`) - Set to `false` to disable the local LLM.
 
@@ -70,9 +83,17 @@ Log into your RunPod dashboard and create a **New Template** with the following 
 
   * `ENABLE_WHISPER` (default `true`) - Set to `false` to disable local STT.
 
-  * `AUTO_PULL_MODEL` - Enter an Ollama model tag (e.g., `gemma4:26b`, `llama3`) to download automatically on boot.
+  * `ENABLE_JUPYTER` (default `true`) - Set to `false` to disable JupyterLab. Note that even when `true`, Jupyter only starts if `JUPYTER_PASSWORD` is also set.
 
-  * `ST_CONTEXT_SIZE` - Pre-configure SillyTavern's default Context Size (e.g., `32768`).
+  **Model & SillyTavern tuning:**
+
+  * `AUTO_PULL_MODEL` - Enter an Ollama model tag (e.g., `gemma3:27b`, `llama3.1:8b`) to download automatically in the background on boot.
+
+  * `WHISPER_MODEL` (default `base`) - faster-whisper model size to load. Options: `tiny`, `base`, `small`, `medium`, `large-v3`, `distil-large-v3`. Larger models give better accuracy at the cost of VRAM and load time.
+
+  * `ST_CONTEXT_SIZE` - Pre-configure SillyTavern's default Context Size in tokens (e.g., `32768`).
+
+  * `ST_AMOUNT_GEN` - Pre-configure SillyTavern's default response length in tokens (e.g., `512`).
 
 ### Step 3: Deploy and Connect
 
@@ -80,9 +101,11 @@ Log into your RunPod dashboard and create a **New Template** with the following 
 
 2. Once the pod is running, click **Connect**.
 
-3. Click **Connect to HTTP Port 8000** to open the SillyTavern Web UI.
+3. Click **Connect to HTTP Port 8000** to open the SillyTavern Web UI. You'll be prompted for Basic Auth credentials — use whatever you set for `ST_USER` / `ST_PASS`, or check the pod logs for the auto-generated password (look for the `Generated random credentials:` banner near the top of the boot log).
 
-4. Click **Connect to HTTP Port 8888** to open JupyterLab for remote file management.
+4. Click **Connect to HTTP Port 8888** to open JupyterLab for remote file management (only available if you set `JUPYTER_PASSWORD`).
+
+> **Security note:** All five exposed ports (8000, 8001, 5100, 8888, 11434) are reachable through RunPod's public proxy. Only SillyTavern (8000) and JupyterLab (8888) have authentication. The Ollama, OmniVoice, and Whisper APIs are unauthenticated and intended to be called from inside the pod — keep their proxy URLs private.
 
 ### Step 4: Configure SillyTavern inside the UI
 
