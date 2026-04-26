@@ -98,12 +98,10 @@ if [ -z "$ST_USER" ] && [ -z "$ST_PASS" ]; then
     echo "  Password: $ST_PASS"
     echo "Set ST_USER and ST_PASS env vars in RunPod to use your own values."
     echo "===================================================================="
-elif [ -z "$ST_PASS" ]; then
-    echo "ERROR: ST_USER is set but ST_PASS is not. Refusing to start with a default password." >&2
-    echo "  Set ST_PASS env var, or unset ST_USER to auto-generate credentials." >&2
+elif [ -z "$ST_USER" ] || [ -z "$ST_PASS" ]; then
+    echo "ERROR: ST_USER and ST_PASS must be set together (or both unset to auto-generate)." >&2
+    echo "  Refusing to start with a half-configured login." >&2
     exit 1
-elif [ -z "$ST_USER" ]; then
-    ST_USER="admin"
 fi
 
 if [ -f "config.yaml" ]; then
@@ -113,6 +111,10 @@ if [ -f "config.yaml" ]; then
     sed -i 's/basicAuthMode: false/basicAuthMode: true/g' config.yaml
     sed -i "s/basicAuthUser: .*/basicAuthUser: '${ST_USER}'/g" config.yaml
     sed -i "s/basicAuthPass: .*/basicAuthPass: '${ST_PASS}'/g" config.yaml
+
+    # Disable prompt/LLM payload logging to prevent RunPod log spam
+    sed -i 's/logPrompts: true/logPrompts: false/g' config.yaml
+    sed -i 's/minLogLevel: 0/minLogLevel: 1/g' config.yaml
 fi
 
 
@@ -139,7 +141,7 @@ if [ "$ENABLE_OLLAMA" = "true" ] || [ "$ENABLE_OLLAMA" = "1" ]; then
     ollama serve &
     OLLAMA_PID=$!
     PIDS_TO_WAIT+=("$OLLAMA_PID")
-    
+
     # Wait for daemon to initialize, then auto-pull model if requested
     if [ -n "$AUTO_PULL_MODEL" ]; then
         echo "Queuing auto-pull for Ollama model: $AUTO_PULL_MODEL..."
@@ -167,7 +169,7 @@ fi
 # 8. Boot OmniVoice API Bridge conditionally via cmd line args on port 8001
 if [ "$ENABLE_OMNIVOICE" = "true" ] || [ "$ENABLE_OMNIVOICE" = "1" ]; then
     echo "Starting OmniVoice API on port 8001..."
-    OMNIVOICE_PORT=8001 omnivoice-server --host 0.0.0.0 --device cuda &
+    OMNIVOICE_PORT=8001 omnivoice-server --host 0.0.0.0 --device cuda --log-level warning &
     OMNI_PID=$!
     PIDS_TO_WAIT+=("$OMNI_PID")
 else
@@ -191,18 +193,28 @@ fi
 # If JUPYTER_PASSWORD isn't set, we skip Jupyter entirely rather than expose
 # an unauthenticated root shell on /workspace.
 if [ "$ENABLE_JUPYTER" = "true" ] || [ "$ENABLE_JUPYTER" = "1" ]; then
-    echo "Starting JupyterLab on port 8888..."
-    # Use modern ServerApp.* options (NotebookApp.* is deprecated in jupyter_server 2.0).
-    # allow_origin / allow_remote_access / disable_check_xsrf are required so the
-    # RunPod proxy (https://<pod>-8888.proxy.runpod.net) isn't blocked as cross-origin.
-    jupyter lab --allow-root --ip=0.0.0.0 --port=8888 --no-browser \
-        --ServerApp.token='' --ServerApp.password='' \
-        --ServerApp.allow_origin='*' \
-        --ServerApp.allow_remote_access=True \
-        --ServerApp.disable_check_xsrf=True \
-        --notebook-dir=/workspace &
-    JUPYTER_PID=$!
-    PIDS_TO_WAIT="$PIDS_TO_WAIT $JUPYTER_PID"
+    if [ -z "$JUPYTER_PASSWORD" ]; then
+        echo "Skipping JupyterLab: JUPYTER_PASSWORD not set."
+        echo "  (Refusing to expose an unauthenticated Jupyter on a public proxy.)"
+    else
+        echo "Starting JupyterLab on port 8888..."
+        # Hash the password with jupyter_server's helper so the plaintext never
+        # touches the process arg list. Read it from the env inside python to
+        # keep it off the `python -c` command line too.
+        JUPYTER_PW_HASH=$(python3 -c "import os; from jupyter_server.auth import passwd; print(passwd(os.environ['JUPYTER_PASSWORD']))")
+        # Use modern ServerApp.* options (NotebookApp.* is deprecated in jupyter_server 2.0).
+        # allow_origin / allow_remote_access / disable_check_xsrf are required so the
+        # RunPod proxy (https://<pod>-8888.proxy.runpod.net) isn't blocked as cross-origin.
+        jupyter lab --allow-root --ip=0.0.0.0 --port=8888 --no-browser \
+            --ServerApp.token='' \
+            --ServerApp.password="$JUPYTER_PW_HASH" \
+            --ServerApp.allow_origin='*' \
+            --ServerApp.allow_remote_access=True \
+            --ServerApp.disable_check_xsrf=True \
+            --notebook-dir=/workspace &
+        JUPYTER_PID=$!
+        PIDS_TO_WAIT+=("$JUPYTER_PID")
+    fi
 else
     echo "Skipping JupyterLab (ENABLE_JUPYTER is set to false)."
 fi
@@ -241,11 +253,8 @@ fi
 if [ "$ST_SKIP_CONFIG" != "true" ]; then
     JQ_FILTER="."
 
-    # Accept ST_CONTEXT_SIZE (documented in README) as the primary name,
-    # and keep ST_MAX_CONTEXT as a backward-compat alias for now.
-    ST_CONTEXT_VAL="${ST_CONTEXT_SIZE:-$ST_MAX_CONTEXT}"
-    if [ -n "$ST_CONTEXT_VAL" ]; then
-        JQ_FILTER="$JQ_FILTER | .max_context=($ST_CONTEXT_VAL | tonumber)"
+    if [ -n "$ST_CONTEXT_SIZE" ]; then
+        JQ_FILTER="$JQ_FILTER | .max_context=($ST_CONTEXT_SIZE | tonumber)"
     fi
     if [ -n "$ST_AMOUNT_GEN" ]; then
         JQ_FILTER="$JQ_FILTER | .amount_gen=($ST_AMOUNT_GEN | tonumber)"
@@ -256,17 +265,14 @@ if [ "$ST_SKIP_CONFIG" != "true" ]; then
     # schema drifts between releases, and writing keys that the current
     # version doesn't recognize tends to corrupt the UI on load. Users
     # configure these once via the SillyTavern UI; the relevant URLs are
-    # documented in the README. If you want to revisit this, the four
-    # filters that previously lived here were:
-    #   - main_api / api_server / ollama_settings.server (Ollama)
-    #   - tts_provider / openai_tts_url (OmniVoice via OpenAI-compat TTS)
-    #   - stt_provider / openai_stt_url (Whisper via OpenAI-compat STT)
+    # documented in the README.
 
     tmp=$(mktemp)
     if jq "$JQ_FILTER" "$ST_SETTINGS" > "$tmp"; then
         mv "$tmp" "$ST_SETTINGS"
     else
         echo "Failed to inject SillyTavern settings (jq error)."
+        rm -f "$tmp"
     fi
 fi
 

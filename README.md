@@ -71,7 +71,7 @@ Log into your RunPod dashboard and create a **New Template** with the following 
 
   **Authentication (recommended to set):**
 
-  * `ST_USER` / `ST_PASS` - Basic Auth credentials for the SillyTavern web UI. **If both are unset, a random 24-character password is generated on boot and printed to the pod logs** (Username: `admin`). If you set one, you must set the other — the container will refuse to start with a half-configured login.
+  * `ST_USER` / `ST_PASS` - Basic Auth credentials for the SillyTavern web UI. **If both are unset, a random 24-character password is generated on boot and printed to the pod logs** (Username: `admin`). Both must be set together — setting only one causes the container to refuse to start, so a half-configured login can never silently fall back to a default.
 
   * `JUPYTER_PASSWORD` - **Required** to enable JupyterLab. Without it, the Jupyter service is skipped (an unauthenticated Jupyter on a publicly proxied port would expose root access to `/workspace`).
 
@@ -91,9 +91,9 @@ Log into your RunPod dashboard and create a **New Template** with the following 
 
   * `WHISPER_MODEL` (default `base`) - faster-whisper model size to load. Options: `tiny`, `base`, `small`, `medium`, `large-v3`, `distil-large-v3`. Larger models give better accuracy at the cost of VRAM and load time.
 
-  * `ST_CONTEXT_SIZE` - Pre-configure SillyTavern's default Context Size in tokens (e.g., `32768`).
+  * `ST_CONTEXT_SIZE` - Pre-configure SillyTavern's default Context Size in tokens (e.g., `261888`).
 
-  * `ST_AMOUNT_GEN` - Pre-configure SillyTavern's default response length in tokens (e.g., `512`).
+  * `ST_AMOUNT_GEN` - Pre-configure SillyTavern's default response length in tokens (e.g., `8096`).
 
 ### Step 3: Deploy and Connect
 
@@ -113,7 +113,7 @@ Log into your RunPod dashboard and create a **New Template** with the following 
 
 2. **Connect the Voice (TTS):** Go to the Extensions/Audio tab. Select **OpenAI TTS** from the Text-to-Speech dropdown menu and set the API Endpoint URL to `http://127.0.0.1:8001/v1`.
 
-3. **Connect Speech-to-Text (STT):** Also in the Extensions/Audio tab, select **OpenAI STT** from the Speech-to-Text provider dropdown menu and set the API Endpoint URL to `http://127.0.0.1:5100/v1`.
+3. **Connect Speech-to-Text (STT):** The Speech Recognition extension is preinstalled in the image. Open the Extensions panel, enable **Speech Recognition**, then in the Extensions/Audio tab select **OpenAI STT** from the Speech-to-Text provider dropdown menu and set the API Endpoint URL to `http://127.0.0.1:5100/v1`.
 
 4. Enable your microphone in SillyTavern, pick a character, and start talking!
 

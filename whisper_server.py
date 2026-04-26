@@ -59,9 +59,10 @@ async def create_transcription(
     file: UploadFile = File(...),
     # OpenAI's STT API uses these field names — keep them aligned so
     # SillyTavern (and other OpenAI-compatible clients) just work.
-    # `model` is currently informational; we always use the model loaded
-    # at startup via the WHISPER_MODEL env var.
-    model: str = Form(default="base"),
+    # `model` is informational: we always use the model loaded at startup
+    # via the WHISPER_MODEL env var. We log a warning if the client asks
+    # for something different so the mismatch isn't silent.
+    model: str = Form(default=MODEL_SIZE),
     language: str = Form(default=None),
     prompt: str = Form(default=None),
     temperature: float = Form(default=0.0),
@@ -69,6 +70,12 @@ async def create_transcription(
 ):
     if whisper_model is None:
         return JSONResponse(status_code=503, content={"error": "Model not loaded yet"})
+
+    if model and model != MODEL_SIZE:
+        print(
+            f"Warning: client requested whisper model '{model}' "
+            f"but server has '{MODEL_SIZE}' loaded. Using '{MODEL_SIZE}'."
+        )
 
     # Spool the upload to a temp file so we don't hold the entire audio
     # buffer in memory. faster-whisper accepts a path directly.

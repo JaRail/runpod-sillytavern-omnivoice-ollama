@@ -72,8 +72,23 @@ COPY --from=sillytavern . /app/SillyTavern
 # RUN curl -fsSL https://github.com/SillyTavern/SillyTavern/archive/refs/heads/release.tar.gz \
 #     | tar -xz -C /app && mv /app/SillyTavern-release /app/SillyTavern
 #
+# Fail fast if the build context wasn't supplied — otherwise the npm ci
+# below produces a much less obvious error.
+RUN test -f /app/SillyTavern/package.json || \
+    (echo "ERROR: SillyTavern source not found. Did you pass --build-context sillytavern=../sillytavern?" >&2 && exit 1)
 WORKDIR /app/SillyTavern
 RUN npm ci --omit=dev
+
+# Pre-install the Speech Recognition extension into the "Install for all
+# users" location so it's available out of the box. Users still have to
+# enable it once in the SillyTavern Extensions panel and point STT at
+# http://127.0.0.1:5100/v1 (see README).
+RUN mkdir -p /app/SillyTavern/public/scripts/extensions/third-party && \
+    curl -fsSL https://github.com/SillyTavern/Extension-Speech-Recognition/archive/refs/heads/main.tar.gz \
+        | tar -xz -C /app/SillyTavern/public/scripts/extensions/third-party && \
+    mv /app/SillyTavern/public/scripts/extensions/third-party/Extension-Speech-Recognition-main \
+       /app/SillyTavern/public/scripts/extensions/third-party/Extension-Speech-Recognition
+
 WORKDIR /app
 
 # Copy application files
