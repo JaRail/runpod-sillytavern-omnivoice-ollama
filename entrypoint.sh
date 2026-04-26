@@ -205,6 +205,8 @@ if [ "$ENABLE_JUPYTER" = "true" ] || [ "$ENABLE_JUPYTER" = "1" ]; then
         # Use modern ServerApp.* options (NotebookApp.* is deprecated in jupyter_server 2.0).
         # allow_origin / allow_remote_access / disable_check_xsrf are required so the
         # RunPod proxy (https://<pod>-8888.proxy.runpod.net) isn't blocked as cross-origin.
+        # A logging filter at /etc/jupyter/jupyter_server_config.py mutes RunPod's
+        # /api/status health-check 403s — see that file for the rationale.
         jupyter lab --allow-root --ip=0.0.0.0 --port=8888 --no-browser \
             --ServerApp.token='' \
             --ServerApp.password="$JUPYTER_PW_HASH" \

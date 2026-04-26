@@ -94,6 +94,10 @@ WORKDIR /app
 # Copy application files
 COPY entrypoint.sh /app/
 COPY whisper_server.py /app/
+# System-wide Jupyter config: silences the benign 403s on /api/status that
+# RunPod's edge proxy emits as health-check probes. /etc/jupyter is one of
+# Jupyter's default config search paths, so no extra --config flag needed.
+COPY jupyter_server_config.py /etc/jupyter/jupyter_server_config.py
 RUN sed -i 's/\r$//' /app/entrypoint.sh && \
     chmod +x /app/entrypoint.sh
 
