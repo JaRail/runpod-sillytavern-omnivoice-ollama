@@ -138,6 +138,11 @@ if [ "$ENABLE_OLLAMA" = "true" ] || [ "$ENABLE_OLLAMA" = "1" ]; then
     export OLLAMA_KV_CACHE_TYPE=bf16
     export OLLAMA_FLASH_ATTENTION=0
     export OLLAMA_CONTEXT_LENGTH=65536
+    # Keep models pinned in VRAM forever by default. RunPod gives us a
+    # dedicated GPU, so the usual 5-minute TTL just adds startup latency on
+    # every idle gap. SillyTavern can still override per-request via its own
+    # keep_alive field if a user wants different behaviour.
+    export OLLAMA_KEEP_ALIVE=-1
     ollama serve &
     OLLAMA_PID=$!
     PIDS_TO_WAIT+=("$OLLAMA_PID")
@@ -157,6 +162,21 @@ if [ "$ENABLE_OLLAMA" = "true" ] || [ "$ENABLE_OLLAMA" = "1" ]; then
             rc=${PIPESTATUS[0]}
             if [ "$rc" -eq 0 ]; then
                 echo "Ollama pull complete: $AUTO_PULL_MODEL"
+                # Preload the model into VRAM so the first chat request doesn't
+                # eat the cold-load latency. An empty-prompt /api/generate with
+                # a non-zero keep_alive is Ollama's documented "just load it"
+                # path — no tokens are generated. The explicit keep_alive in
+                # the body is belt-and-suspenders alongside OLLAMA_KEEP_ALIVE,
+                # in case a client overrides the default later.
+                echo "Preloading $AUTO_PULL_MODEL into VRAM..."
+                if curl -sf -X POST http://127.0.0.1:11434/api/generate \
+                        -H 'Content-Type: application/json' \
+                        -d "{\"model\":\"$AUTO_PULL_MODEL\",\"keep_alive\":-1}" \
+                        >/dev/null; then
+                    echo "Preload complete: $AUTO_PULL_MODEL pinned in VRAM."
+                else
+                    echo "Preload request failed; model will load on first use."
+                fi
             else
                 echo "Ollama pull FAILED (exit $rc): $AUTO_PULL_MODEL"
             fi
