@@ -14,6 +14,63 @@ This repository gives you a fully self-hosted, private AI voice chat environment
 
 * **Auto-Pull LLMs:** Specify an LLM (like `gemma4:26b`) during deployment, and the pod will automatically download it in the background while booting.
 
+## 🧮 Hardware Requirements
+
+Approximate VRAM footprints for each service. All three run on the same GPU by default, so add the rows together for the configuration you plan to deploy. Numbers assume the model is fully loaded into VRAM (no CPU offload).
+
+### Whisper (STT)
+
+faster-whisper, fp16. Set via the `WHISPER_MODEL` env var.
+
+| Model | VRAM |
+|-------|------|
+| `tiny` | ~1 GB |
+| `base` | ~1 GB |
+| `small` | ~2 GB |
+| `medium` | ~5 GB |
+| `distil-large-v3` | ~6 GB |
+| `large-v3` | ~10 GB |
+
+### OmniVoice (TTS)
+
+Roughly **3–4 GB** at fp16 with the default voice. Synthesis is short-lived and the KV cache is negligible compared to an LLM, so you can generally treat OmniVoice as a flat overhead.
+
+### Gemma 4 (LLM via Ollama)
+
+Two flavors are interesting here: the **31B dense** model and the **26B-A4B** mixture-of-experts model (26 B total parameters, ~4 B active per token). Weights below assume the **native QAT int4** checkpoints Google ships alongside the bf16 release — these are quantization-aware-trained, so quality is close to bf16 while the footprint matches a Q4 post-training quant. (Plain `gemma4:31b` / `gemma4:26b` in Ollama resolve to the QAT build by default; the bf16 versions roughly quadruple the weight column.) KV cache is fp16; you can roughly halve it with `OLLAMA_KV_CACHE_TYPE=q8_0` or quarter it with `q4_0` at some quality cost.
+
+**Gemma 4 31B (dense)** — weights ≈ 17 GB
+
+| Context | KV cache | Total VRAM |
+|---------|----------|------------|
+| 8k | ~3 GB | ~20 GB |
+| 16k | ~6 GB | ~23 GB |
+| 32k | ~12 GB | ~29 GB |
+| 64k | ~24 GB | ~41 GB |
+| 128k | ~48 GB | ~65 GB |
+| 256k | ~96 GB | ~113 GB |
+
+**Gemma 4 26B-A4B (MoE, ~4 B active)** — weights ≈ 13 GB
+
+The full 26 B parameters still need to live in VRAM; only the *compute* per token is cheaper. KV cache scales with the active path, so it's noticeably lighter than the 31B at long context.
+
+| Context | KV cache | Total VRAM |
+|---------|----------|------------|
+| 8k | ~2 GB | ~15 GB |
+| 16k | ~4 GB | ~17 GB |
+| 32k | ~8 GB | ~21 GB |
+| 64k | ~16 GB | ~29 GB |
+| 128k | ~32 GB | ~45 GB |
+| 256k | ~64 GB | ~77 GB |
+
+### Picking a GPU
+
+Add Whisper + OmniVoice (typically ~5–8 GB combined with `base`/`small` Whisper) to the LLM row above:
+
+* **24 GB (RTX 3090 / 4090):** comfortably runs 26B-A4B up to ~16k context, or 31B at 8k with a tight Whisper model. Long-context (>32k) requires KV cache quantization.
+* **48 GB (A6000 / L40S):** 31B at 32k or 26B-A4B at 64k with headroom for TTS/STT.
+* **80 GB (A100 / H100):** 31B at 128k or 26B-A4B at 256k.
+
 ## 📂 Repository Structure
 
 ```
