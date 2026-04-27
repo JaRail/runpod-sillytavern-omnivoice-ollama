@@ -24,6 +24,30 @@ mkdir -p /workspace/omnivoice_models
 export OLLAMA_MODELS="/workspace/ollama_models"
 mkdir -p "$OLLAMA_MODELS"
 
+# 1.5. Optionally restore SillyTavern state from a RunPod S3-compatible
+# network volume (or any S3-compatible bucket). This runs BEFORE the
+# symlink+seed block so that a successful restore populates /workspace
+# and the seed-from-image logic correctly notices it's already populated
+# and skips. We only attempt restore on a fresh workspace — checking for
+# /workspace/st_data/default — so a pod restart doesn't keep clobbering
+# in-progress edits with the last snapshot.
+#
+# Failure here is non-fatal: better to boot with default seed than to
+# refuse to start. Errors are logged so the user can see them in RunPod's
+# log viewer.
+if [ "$BACKUP_RESTORE_ON_BOOT" = "true" ] || [ "$BACKUP_RESTORE_ON_BOOT" = "1" ]; then
+    if [ ! -d /workspace/st_data/default ] && [ ! -d /workspace/st_data/default-user ]; then
+        echo "Attempting restore from configured S3 backup..."
+        if /app/restore.sh; then
+            echo "Restore succeeded."
+        else
+            echo "Restore failed (exit $?). Continuing with default seed." >&2
+        fi
+    else
+        echo "Skipping restore: /workspace/st_data already populated."
+    fi
+fi
+
 # 2. Safely symlink SillyTavern persistent directories
 cd /app/SillyTavern
 

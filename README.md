@@ -95,6 +95,24 @@ Log into your RunPod dashboard and create a **New Template** with the following 
 
   * `ST_AMOUNT_GEN` - Pre-configure SillyTavern's default response length in tokens (e.g., `8096`).
 
+  **Backup / restore (cross-region state sync):**
+
+  These wire up `/app/backup.sh` and `/app/restore.sh` against any S3-compatible store. The intended target is a small RunPod network volume (~10 GB) used purely to shuttle SillyTavern config between pods. The volume's S3 endpoint is reachable from anywhere over the public internet, so a pod in Romania can pull state from a US-KS-2 volume — the regional pinning that prevents you from *mounting* the volume across regions does not apply to the S3 API. See RunPod's [S3 API docs](https://docs.runpod.io/storage/s3-api) for the list of S3-enabled datacenters.
+
+  Only `st_data`, `secrets.json`, and `config.yaml` are included. Plugins and model weights are excluded — plugins reinstall from the UI, model weights would defeat the point of "small".
+
+  * `BACKUP_S3_ENDPOINT` - The S3 API endpoint URL for your network volume's datacenter (e.g., `https://s3api-us-ks-2.runpod.io`).
+
+  * `BACKUP_S3_REGION` - The datacenter ID, lowercased (e.g., `us-ks-2`). Required by AWS SigV4 signing.
+
+  * `BACKUP_S3_BUCKET` - Your network volume ID (acts as the bucket name).
+
+  * `BACKUP_S3_ACCESS_KEY` / `BACKUP_S3_SECRET_KEY` - The S3 credentials generated in the RunPod console under your user's API keys section.
+
+  * `BACKUP_PREFIX` (default `sillytavern-backup`) - Folder within the bucket. Override if you're sharing the volume across multiple stacks.
+
+  * `BACKUP_RESTORE_ON_BOOT` (default `false`) - When `true`, `entrypoint.sh` calls `/app/restore.sh` automatically on a fresh pod (i.e. when `/workspace/st_data` has no `default-user`). Restore failure is non-fatal — the pod boots with default seed if the snapshot is missing or unreachable.
+
 ### Step 3: Deploy and Connect
 
 1. Deploy a pod using your new template. (An RTX 3090, 4090, or A6000 is recommended for local voice + LLM generation).
@@ -116,6 +134,34 @@ Log into your RunPod dashboard and create a **New Template** with the following 
 3. **Connect Speech-to-Text (STT):** The Speech Recognition extension is preinstalled in the image. Open the Extensions panel, enable **Speech Recognition**, then in the Extensions/Audio tab select **OpenAI STT** from the Speech-to-Text provider dropdown menu and set the API Endpoint URL to `http://127.0.0.1:5100/v1`.
 
 4. Enable your microphone in SillyTavern, pick a character, and start talking!
+
+---
+
+## 💾 Backing up and restoring SillyTavern state
+
+GPU availability across RunPod datacenters is uneven, so pinning yourself to one region (e.g. by mounting a network volume directly) often means waiting for capacity. The setup below sidesteps that: keep your settings on a small network volume in any datacenter, and pull them into pods running anywhere via the S3 API.
+
+### One-time setup
+
+1. **Create a network volume** in any S3-enabled datacenter (currently EUR-IS-1, EU-RO-1, EU-CZ-1, US-KS-2, US-CA-2). 10 GB is plenty — SillyTavern config is a few MB.
+
+2. **Generate S3 credentials** from the RunPod console under your user settings. Note the access key, secret, and the volume ID.
+
+3. **Set the `BACKUP_S3_*` env vars** in your pod template (see the env vars section above). Set `BACKUP_RESTORE_ON_BOOT=true` so new pods automatically pull the latest snapshot.
+
+### Day-to-day workflow
+
+* **Save your current state:** open JupyterLab (port 8888) → Terminal → `/app/backup.sh`. This tars your config and uploads it as `latest.tar.gz`. The previous `latest` is rotated to `previous.tar.gz` first, so you always have one snapshot of fallback in case the most recent backup captured a corrupted state.
+
+* **Spin up a new pod:** with `BACKUP_RESTORE_ON_BOOT=true`, `entrypoint.sh` calls `/app/restore.sh` on first boot. Your characters, chats, presets, world info, API keys, and connection profiles are all there before SillyTavern's UI loads.
+
+* **Roll back a bad backup:** `/app/restore.sh previous` re-extracts the rotated copy on top of the current `/workspace`.
+
+* **Sync between desktop and laptop:** they're already synced — both browsers see the same server-side state on the same pod. The backup workflow only matters when you spin up a *new* pod.
+
+### What gets backed up
+
+`st_data/` (chats, characters, presets, world info, settings), `secrets.json` (API keys), and `config.yaml`. Plugins (`st_plugins/`) and model weights are intentionally excluded — plugins reinstall from the UI on a fresh pod, and Ollama / OmniVoice models are large enough that re-pulling them from their respective registries is faster than shuffling them through S3.
 
 ---
 

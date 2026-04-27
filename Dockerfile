@@ -23,13 +23,17 @@ WORKDIR /app
 # - libsm6 / libxext6: shared deps some audio/CV libraries pull in
 # - jq: settings.json patching in entrypoint.sh
 # - ca-certificates: TLS roots (usually present, kept for safety)
+# - rclone: S3-compatible client used by backup.sh / restore.sh against the
+#   RunPod network-volume S3 API. Apt's rclone (>=1.50) supports the
+#   --endpoint-url style we need; if the version becomes a problem we can
+#   switch to `curl https://rclone.org/install.sh | bash` for the latest.
 #
 # Not pinning apt versions: the base image is already pinned (which fixes
 # the Ubuntu repo state at build time), and pinning each utility creates
 # ongoing maintenance churn for marginal security benefit.
 # hadolint ignore=DL3008
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl ffmpeg libsm6 libxext6 jq ca-certificates \
+    curl ffmpeg libsm6 libxext6 jq ca-certificates rclone \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Python dependencies via uv (much faster than pip). The base image's
@@ -94,12 +98,18 @@ WORKDIR /app
 # Copy application files
 COPY entrypoint.sh /app/
 COPY whisper_server.py /app/
+# backup.sh / restore.sh: snapshot SillyTavern state to a RunPod
+# S3-compatible network volume. Manually invoked from JupyterLab (backup),
+# and called by entrypoint.sh on boot (restore) when configured.
+COPY backup.sh restore.sh /app/
 # System-wide Jupyter config: silences the benign 403s on /api/status that
 # RunPod's edge proxy emits as health-check probes. /etc/jupyter is one of
 # Jupyter's default config search paths, so no extra --config flag needed.
 COPY jupyter_server_config.py /etc/jupyter/jupyter_server_config.py
-RUN sed -i 's/\r$//' /app/entrypoint.sh && \
-    chmod +x /app/entrypoint.sh
+# Strip CRLF (in case of Windows checkouts) and mark all shell scripts
+# executable in one pass. dos2unix isn't installed; sed -i is portable.
+RUN sed -i 's/\r$//' /app/entrypoint.sh /app/backup.sh /app/restore.sh && \
+    chmod +x /app/entrypoint.sh /app/backup.sh /app/restore.sh
 
 EXPOSE 8000 8001 5100 8888 11434
 
